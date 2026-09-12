@@ -1062,3 +1062,75 @@ def test_recovery_reports_the_ring_re_registration_result(fake_adapter, ring_ok)
     adapter.register_kv_caches({"layer.0": fake_tensor})
 
     assert adapter._reregister_kv_caches_callback() is ring_ok
+
+
+# --- Dynamo identity (KV-state attachment integration, step 1) ----------------
+
+
+def _clear_dynamo_env(monkeypatch) -> None:
+    for var in (adapter_mod.ENV_DYNAMO_WORKER_ID, adapter_mod.ENV_DYNAMO_NAMESPACE):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_dynamo_identity_off_outside_dynamo(fake_adapter, monkeypatch):
+    """No worker id anywhere: the adapter carries no identity."""
+    _clear_dynamo_env(monkeypatch)
+    assert _make_worker_adapter().dynamo_identity is None
+    assert (
+        _make_worker_adapter(extra_config={"lmcache.mp.port": 5555}).dynamo_identity
+        is None
+    )
+
+
+def test_dynamo_identity_from_environment(fake_adapter, monkeypatch):
+    """Dynamo's DYN_FPM_WORKER_ID / DYN_NAMESPACE are picked up, with the
+    aggregated-mode component/endpoint defaults."""
+    _clear_dynamo_env(monkeypatch)
+    monkeypatch.setenv(adapter_mod.ENV_DYNAMO_WORKER_ID, "123456789")
+    monkeypatch.setenv(adapter_mod.ENV_DYNAMO_NAMESPACE, "prod")
+    assert _make_worker_adapter().dynamo_identity == adapter_mod.DynamoIdentity(
+        namespace="prod", component="backend", endpoint="generate", worker_id=123456789
+    )
+
+
+def test_dynamo_identity_namespace_defaults_to_dynamo(fake_adapter, monkeypatch):
+    _clear_dynamo_env(monkeypatch)
+    monkeypatch.setenv(adapter_mod.ENV_DYNAMO_WORKER_ID, "7")
+    assert _make_worker_adapter().dynamo_identity.namespace == "dynamo"
+
+
+def test_dynamo_identity_explicit_keys_win_over_env(fake_adapter, monkeypatch):
+    """lmcache.mp.dynamo.* keys (the future explicit Dynamo-side path) take
+    precedence over the environment, per field."""
+    _clear_dynamo_env(monkeypatch)
+    monkeypatch.setenv(adapter_mod.ENV_DYNAMO_WORKER_ID, "1")
+    monkeypatch.setenv(adapter_mod.ENV_DYNAMO_NAMESPACE, "from-env")
+    adapter = _make_worker_adapter(
+        extra_config={
+            "lmcache.mp.dynamo.worker_id": 42,
+            "lmcache.mp.dynamo.component": "prefill",
+        }
+    )
+    assert adapter.dynamo_identity == adapter_mod.DynamoIdentity(
+        namespace="from-env", component="prefill", endpoint="generate", worker_id=42
+    )
+
+
+def test_dynamo_identity_explicit_keys_without_env(fake_adapter, monkeypatch):
+    _clear_dynamo_env(monkeypatch)
+    adapter = _make_worker_adapter(
+        extra_config={
+            "lmcache.mp.dynamo.worker_id": "99",
+            "lmcache.mp.dynamo.namespace": "ns",
+        }
+    )
+    assert adapter.dynamo_identity == adapter_mod.DynamoIdentity(
+        namespace="ns", component="backend", endpoint="generate", worker_id=99
+    )
+
+
+def test_dynamo_identity_rejects_non_integer_worker_id(fake_adapter, monkeypatch):
+    _clear_dynamo_env(monkeypatch)
+    monkeypatch.setenv(adapter_mod.ENV_DYNAMO_WORKER_ID, "not-an-id")
+    with pytest.raises(ValueError, match="worker id must be an integer"):
+        _make_worker_adapter()

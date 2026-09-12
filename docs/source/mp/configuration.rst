@@ -748,6 +748,21 @@ All connector-level options are passed through
      - ``10.0``
      - Interval (seconds) between periodic heartbeat pings sent from the
        connector to the server.
+   * - ``lmcache.mp.dynamo.worker_id``
+     - ``$DYN_FPM_WORKER_ID``
+     - Under NVIDIA Dynamo only: the Dynamo worker (discovery instance id)
+       this engine serves as, used for KV-state attachments. Defaults to
+       the id ``dynamo.vllm`` exports into the engine environment; unset
+       and no environment value means the integration is off.
+   * - ``lmcache.mp.dynamo.namespace``
+     - ``$DYN_NAMESPACE`` or ``dynamo``
+     - Dynamo namespace of that worker.
+   * - ``lmcache.mp.dynamo.component``
+     - ``backend``
+     - Dynamo component of that worker (``prefill`` in prefill mode).
+   * - ``lmcache.mp.dynamo.endpoint``
+     - ``generate``
+     - Dynamo endpoint of that worker.
    * - ``lmcache.mp.eager_prefetch``
      - ``false``
      - Submit the LMCache lookup when a request enters vLLM's waiting queue,

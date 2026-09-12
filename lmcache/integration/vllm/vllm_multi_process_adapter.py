@@ -102,6 +102,15 @@ DEFAULT_HEARTBEAT_INTERVAL: float = ExtraConfigDefault.heartbeat_interval.defaul
 
 _EXTRA_CONFIG_KEY_PREFIX = "lmcache.mp."
 
+# Dynamo exports the worker's discovery instance id -- the id its frontend
+# routes requests to -- into the engine environment for its forward-pass
+# metrics scheduler (dynamo/vllm/main.py, setup_vllm_engine); the engine-core
+# and TP worker processes inherit it. Undocumented Dynamo-internal name: keep
+# it in this one constant.
+ENV_DYNAMO_WORKER_ID = "DYN_FPM_WORKER_ID"
+ENV_DYNAMO_NAMESPACE = "DYN_NAMESPACE"
+_DYNAMO_EXTRA_CONFIG_KEY_PREFIX = "lmcache.mp.dynamo."
+
 # Floor (seconds) of the MP server's worker reap timeout. It only covers the
 # default 10 s heartbeat interval (3 x 10 s); the adapter warns at startup
 # when 3 x heartbeat_interval exceeds it (server timeout must be raised too).
@@ -178,6 +187,76 @@ def _resolve_extra_config(
             )
         resolved[item.name] = value
     return resolved
+
+
+@dataclass(frozen=True)
+class DynamoIdentity:
+    """The Dynamo worker an engine serves as, for KV-state attachments.
+
+    Attributes:
+        namespace: Dynamo namespace (``--namespace`` / ``DYN_NAMESPACE``).
+        component: Dynamo component: ``backend`` in aggregated mode,
+            ``prefill`` in prefill mode.
+        endpoint: Dynamo endpoint, ``generate``.
+        worker_id: The discovery instance id the Dynamo frontend routes
+            requests to.
+    """
+
+    namespace: str
+    component: str
+    endpoint: str
+    worker_id: int
+
+
+def _resolve_dynamo_identity(
+    extra_config: dict[str, Any] | None,
+) -> DynamoIdentity | None:
+    """Resolve the Dynamo worker identity of this engine, if it runs under Dynamo.
+
+    Explicit ``lmcache.mp.dynamo.{namespace,component,endpoint,worker_id}``
+    keys in *extra_config* win over the environment. The environment source is
+    Dynamo's own ``DYN_FPM_WORKER_ID`` (see :data:`ENV_DYNAMO_WORKER_ID`) and
+    ``DYN_NAMESPACE``; component and endpoint default to ``backend`` /
+    ``generate`` (aggregated mode).
+
+    Args:
+        extra_config: The connector's ``kv_connector_extra_config`` (may be
+            *None*).
+
+    Returns:
+        The identity, or *None* when neither an explicit worker id nor
+        ``DYN_FPM_WORKER_ID`` is present -- i.e. the engine does not run
+        under Dynamo and the integration stays off.
+
+    Raises:
+        ValueError: If the worker id is present but not an integer.
+    """
+    cfg = extra_config or {}
+
+    def _key(name: str) -> Any:
+        return cfg.get(_DYNAMO_EXTRA_CONFIG_KEY_PREFIX + name)
+
+    raw_worker_id = _key("worker_id")
+    if raw_worker_id is None:
+        raw_worker_id = os.environ.get(ENV_DYNAMO_WORKER_ID)
+    if raw_worker_id is None:
+        return None
+    try:
+        worker_id = int(raw_worker_id)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"Dynamo worker id must be an integer, got {raw_worker_id!r} "
+            f"(from {_DYNAMO_EXTRA_CONFIG_KEY_PREFIX}worker_id or "
+            f"${ENV_DYNAMO_WORKER_ID})"
+        ) from None
+    return DynamoIdentity(
+        namespace=str(
+            _key("namespace") or os.environ.get(ENV_DYNAMO_NAMESPACE, "dynamo")
+        ),
+        component=str(_key("component") or "backend"),
+        endpoint=str(_key("endpoint") or "generate"),
+        worker_id=worker_id,
+    )
 
 
 class _IpcEvent(Protocol):
@@ -1218,6 +1297,14 @@ class LMCacheMPWorkerAdapter:
             self._mp_transfer_mode = None
         self.req_client = RequestClientFactory.create(server_url, context=context)
         self._mq_timeout = mq_timeout
+
+        # Which Dynamo worker this engine is, for the server's KV-state
+        # attachments; None outside Dynamo (the integration is then off).
+        self.dynamo_identity: DynamoIdentity | None = _resolve_dynamo_identity(
+            extra_config
+        )
+        if self.dynamo_identity is not None:
+            logger.info("Dynamo identity resolved: %s", self.dynamo_identity)
 
         # Instance id for GPU worker. uuid4-derived (OS entropy) rather
         # than os.getpid() to avoid collision in containerized deployments.
