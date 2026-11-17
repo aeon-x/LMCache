@@ -62,7 +62,7 @@ jobs:
       - name: Build cu13.0 nightly wheel
         env:
           CIBW_BUILD: cp3*-manylinux_${{ matrix.cibw_arch }}
-          CIBW_TEST_COMMAND: "python {project}/.github/scripts/assert_native_ops.py"
+          CIBW_TEST_COMMAND: "python {project}/.github/scripts/assert_native_ops.py && python {project}/.github/scripts/test_nixl_wheel.py cu13 && python {project}/.github/scripts/test_nixl_wheel.py cu12"
         run: |
           python -m cibuildwheel --output-dir dist/cu130
 

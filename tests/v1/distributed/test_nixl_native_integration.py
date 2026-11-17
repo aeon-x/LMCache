@@ -43,9 +43,8 @@ requires_nixl_integration = pytest.mark.skipif(
     reason="set LMCACHE_NIXL_INTEGRATION=1 to run native NIXL tests",
 )
 requires_nixl_extension = pytest.mark.skipif(
-    importlib.util.find_spec("lmcache.lmcache_nixl") is None
-    and importlib.util.find_spec("lmcache_nixl") is None,
-    reason="neither the lmcache_nixl extension nor lmcache-nixl is installed",
+    importlib.util.find_spec("lmcache.lmcache_nixl") is None,
+    reason="optional lmcache_nixl extension is not built",
 )
 requires_nixl_object_integration = pytest.mark.skipif(
     os.environ.get("LMCACHE_NIXL_OBJECT_INTEGRATION") != "1",

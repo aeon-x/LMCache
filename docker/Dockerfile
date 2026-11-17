@@ -97,9 +97,11 @@ RUN --mount=type=cache,target=/root/.cache/ccache,id=ccache \
     uv pip install "nixl<2" && \
     python3 -c 'import torch; print("TORCH=", torch.__version__)' && \
     python3 -c 'import importlib.metadata as m; print("NIXL=", m.version("nixl"))' && \
-    python3 setup.py bdist_wheel --dist-dir=dist_lmcache && \
+    # Compile the NIXL connector into the wheel, linking that nixl's libnixl.
+    BUILD_WITH_NIXL=1 \
+    NIXL_LIBRARY_DIR="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/.nixl_cu13.mesonpy.libs" \
+        python3 setup.py bdist_wheel --dist-dir=dist_lmcache && \
     bash docker/build_raw_block_wheel.sh dist_lmcache && \
-    bash docker/build_nixl_wheel.sh dist_lmcache && \
     uv pip install ./dist_lmcache/*.whl --verbose && \
     python3 .github/scripts/assert_native_ops.py && \
     python3 -c 'import lmcache_rust_raw_block_io' && \
@@ -107,7 +109,7 @@ RUN --mount=type=cache,target=/root/.cache/ccache,id=ccache \
     python3 -c 'import pygrpc_native' && \
     uv pip install -r requirements/kafka.txt && \
     python3 -c 'import confluent_kafka' && \
-    python3 -c 'import nixl, lmcache_nixl'
+    python3 -c 'import nixl, lmcache.lmcache_nixl'
 
 WORKDIR /workspace
 USER lmcache
@@ -135,7 +137,7 @@ RUN --mount=type=bind,source=requirements/grpc_native.txt,target=/tmp/grpc_nativ
         vllm[runai,tensorizer,flashinfer] \
         --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG} \
         --index-strategy unsafe-best-match && \
-    # The nixl extra adds the NIXL connector (lmcache-nixl) at lmcache's version.
+    # The wheel includes the NIXL connector; the nixl extra adds its runtime.
     uv pip install "lmcache[nixl]${VER:+==${VER}}" \
         --extra-index-url https://download.pytorch.org/whl/${CUDA_TAG} \
         --index-strategy unsafe-best-match --verbose && \
@@ -151,7 +153,7 @@ RUN --mount=type=bind,source=requirements/grpc_native.txt,target=/tmp/grpc_nativ
     python3 -c 'import pygrpc_native' && \
     uv pip install -r /tmp/kafka.txt && \
     python3 -c 'import confluent_kafka' && \
-    python3 -c 'import nixl, lmcache_nixl'
+    python3 -c 'import nixl, lmcache.lmcache_nixl'
 
 WORKDIR /workspace
 USER lmcache

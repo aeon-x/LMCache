@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Store and load chunks through an installed lmcache-nixl wheel (POSIX backend).
+"""Store and load chunks through an installed lmcache wheel's NIXL connector.
 
     python test_nixl_wheel.py <cu12|cu13>
 
-Needs only lmcache-nixl and nixl-<variant> installed (both may be --no-deps):
-libnixl is loaded from the nixl-<variant> wheel the way ``import nixl`` would,
-without torch, so one wheel can be checked against each NIXL CUDA line.
+Loads libnixl from the nixl-<variant> wheel, then moves data through
+``lmcache.lmcache_nixl`` with the POSIX backend, so one lmcache wheel can be
+checked against each NIXL CUDA line.
 """
 
 # Standard
@@ -38,13 +38,13 @@ def main(variant: str) -> None:
     libs = f".nixl_{variant}.mesonpy.libs/libnixl.so"
     libnixl = next(p for d in site.getsitepackages() if (p := Path(d, libs)).exists())
     # Preload libnixl globally instead of `import nixl`, which picks the CUDA
-    # line from torch's build (nixl-cu13 without torch), so it couldn't test
-    # nixl-cu12 here. The adapter's path (`import nixl`, then lmcache_nixl
-    # reusing that libnixl by SONAME) is checked by the image builds.
+    # line from torch's build (always cu13 here), so it couldn't test nixl-cu12.
+    # The adapter's path (`import nixl`, then lmcache.lmcache_nixl reusing that
+    # libnixl by SONAME) is checked by the image builds.
     ctypes.CDLL(str(libnixl), mode=ctypes.RTLD_GLOBAL)
 
-    # Third Party
-    from lmcache_nixl import LMCacheNixlClient
+    # First Party
+    from lmcache.lmcache_nixl import LMCacheNixlClient
 
     arena = mmap.mmap(-1, 2 * _CHUNK * _COUNT)
     address = ctypes.addressof(ctypes.c_char.from_buffer(arena))
@@ -71,7 +71,7 @@ def main(variant: str) -> None:
     assert ok, f"load failed: {error}"
     assert results == [True] * _COUNT, results
     assert all(bytes(t) == bytes(s) for s, t in zip(source, target, strict=True))
-    print(f"lmcache_nixl round trip OK with nixl-{variant} ({libnixl})")
+    print(f"lmcache.lmcache_nixl round trip OK with nixl-{variant} ({libnixl})")
 
 
 if __name__ == "__main__":
