@@ -109,7 +109,8 @@ RUN --mount=type=cache,target=/root/.cache/ccache,id=ccache \
     python3 -c 'import pygrpc_native' && \
     uv pip install -r requirements/kafka.txt && \
     python3 -c 'import confluent_kafka' && \
-    python3 -c 'import nixl, lmcache.lmcache_nixl'
+    # -P: import the installed lmcache, not the checkout in the working directory.
+    python3 -P -c 'import nixl, lmcache.lmcache_nixl'
 
 WORKDIR /workspace
 USER lmcache
