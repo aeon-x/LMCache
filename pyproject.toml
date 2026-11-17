@@ -230,6 +230,13 @@ manylinux-x86_64-image = "docker.io/pytorch/manylinux2_28-builder:cuda13.0"
 # aarch64 (Grace-Blackwell) CUDA 13.0 builder image (glibc 2.28 based).
 manylinux-aarch64-image = "docker.io/pytorch/manylinuxaarch64-builder:cuda13.0"
 
+# nixl has no free-threaded wheels, so those builds can't install it to test the
+# NIXL connector (test_nixl_wheel.py skips itself there).
+[[tool.cibuildwheel.overrides]]
+select = "cp3*t-*"
+test-requires = ""
+before-test = ""
+
 [tool.cibuildwheel.linux]
 # libnixl comes from the nixl wheel at runtime, so it is excluded.
 repair-wheel-command = """

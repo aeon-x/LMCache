@@ -16,6 +16,7 @@ import mmap
 import select
 import site
 import sys
+import sysconfig
 import tempfile
 import time
 
@@ -35,6 +36,9 @@ def _wait(client: Any, future_id: int) -> tuple[bool, str, list[bool] | None]:
 
 
 def main(variant: str) -> None:
+    if sysconfig.get_config_var("Py_GIL_DISABLED"):
+        print("skipped: nixl publishes no free-threaded wheels")
+        return
     libs = f".nixl_{variant}.mesonpy.libs/libnixl.so"
     libnixl = next(p for d in site.getsitepackages() if (p := Path(d, libs)).exists())
     # Preload libnixl globally instead of `import nixl`, which picks the CUDA
