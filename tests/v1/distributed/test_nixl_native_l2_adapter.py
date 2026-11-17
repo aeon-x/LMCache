@@ -2,7 +2,11 @@
 """Public configuration and factory tests for ``nixl_native``."""
 
 # Standard
+from collections.abc import Sequence
 from types import ModuleType
+import importlib.abc
+import importlib.machinery
+import importlib.util
 import os
 import sys
 
@@ -99,10 +103,11 @@ def test_factory_requires_l1_memory_desc() -> None:
         create_l2_adapter(config)
 
 
-def test_factory_missing_extension_has_build_guidance(
+def test_factory_missing_extension_has_install_guidance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Selecting an unbuilt connector reports actionable build settings."""
+    """Without the connector, the error names the lmcache[nixl] install and
+    the source-build settings."""
     config = NixlNativeL2AdapterConfig.from_dict(
         {
             "backend": "OBJ",
@@ -110,8 +115,137 @@ def test_factory_missing_extension_has_build_guidance(
         }
     )
     monkeypatch.setitem(sys.modules, "lmcache.lmcache_nixl", None)
-    with pytest.raises(RuntimeError, match="BUILD_WITH_NIXL=1"):
+    with pytest.raises(RuntimeError) as excinfo:
         create_l2_adapter(config, L1MemoryDesc(4096, 8192, 4096))
+    assert 'pip install "lmcache[nixl]"' in str(excinfo.value)
+    assert "BUILD_WITH_NIXL=1" in str(excinfo.value)
+
+
+class _FakeNixlClient:
+    """Minimal native-client contract for the import-order tests."""
+
+    storage_type = "OBJECT"
+    supports_query = True
+    supports_delete = False
+    supports_direct_io = False
+    atomic_publication = False
+
+    def __init__(self, **kwargs: object) -> None:
+        self.read_fd, self.write_fd = os.pipe()
+
+    def event_fd(self) -> int:
+        """Return the pollable completion descriptor."""
+        return self.read_fd
+
+    def close(self) -> None:
+        """Close the fake completion descriptor."""
+        os.close(self.read_fd)
+        os.close(self.write_fd)
+
+
+class _ImportScenario(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Simulate how the connector extension and the nixl wheel load.
+
+    ``lmcache.lmcache_nixl`` loads directly when ``source_build`` (its RUNPATH
+    finds the NIXL SDK); otherwise, like a published wheel, only once ``nixl``
+    has been imported, as its libnixl comes from there. Importing ``nixl``
+    raises ``nixl_error`` when set. Records every import attempt in
+    ``attempts``.
+    """
+
+    _NAMES = ("lmcache.lmcache_nixl", "nixl")
+
+    def __init__(self, source_build: bool, nixl_error: str = "") -> None:
+        self.source_build = source_build
+        self.nixl_error = nixl_error
+        self.attempts: list[str] = []
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None,
+        target: ModuleType | None = None,
+    ) -> importlib.machinery.ModuleSpec | None:
+        """Claim the connector extension and nixl; leave other imports alone."""
+        if fullname not in self._NAMES:
+            return None
+        self.attempts.append(fullname)
+        if fullname == "nixl" and self.nixl_error:
+            raise ImportError(self.nixl_error)
+        if (
+            fullname == "lmcache.lmcache_nixl"
+            and not self.source_build
+            and "nixl" not in sys.modules
+        ):
+            raise ImportError("libnixl.so: cannot open shared object file")
+        return importlib.util.spec_from_loader(fullname, self)
+
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> ModuleType | None:
+        """Use the default module creation."""
+        return None
+
+    def exec_module(self, module: ModuleType) -> None:
+        """Populate the fake connector module with the client class."""
+        if module.__name__ != "nixl":
+            module.LMCacheNixlClient = _FakeNixlClient  # type: ignore[attr-defined]
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Route the connector and nixl imports through this scenario."""
+        for name in self._NAMES:
+            # setitem records the real entry (or its absence), so the fake
+            # modules imported during the test are dropped on teardown.
+            monkeypatch.setitem(sys.modules, name, None)
+            monkeypatch.delitem(sys.modules, name)
+        monkeypatch.setattr(sys, "meta_path", [self, *sys.meta_path])
+
+
+def _obj_config() -> NixlNativeL2AdapterConfig:
+    return NixlNativeL2AdapterConfig.from_dict({"backend": "OBJ", "backend_params": {}})
+
+
+def test_factory_source_build_does_not_import_nixl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A source build's connector, which finds its NIXL SDK through RUNPATH,
+    is used without importing the nixl wheel, which would load its libnixl."""
+    scenario = _ImportScenario(source_build=True)
+    scenario.install(monkeypatch)
+
+    adapter = create_l2_adapter(_obj_config(), L1MemoryDesc(4096, 8192, 4096))
+    adapter.close()
+
+    assert scenario.attempts == ["lmcache.lmcache_nixl"]
+
+
+def test_factory_wheel_imports_nixl_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A published wheel's connector loads after the nixl wheel."""
+    scenario = _ImportScenario(source_build=False)
+    scenario.install(monkeypatch)
+
+    adapter = create_l2_adapter(_obj_config(), L1MemoryDesc(4096, 8192, 4096))
+    adapter.close()
+
+    assert scenario.attempts == [
+        "lmcache.lmcache_nixl",
+        "nixl",
+        "lmcache.lmcache_nixl",
+    ]
+
+
+def test_factory_reports_nixl_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing nixl import (e.g. missing OpenSSL 3) is reported."""
+    scenario = _ImportScenario(
+        source_build=False,
+        nixl_error="libssl.so.3: cannot open shared object file",
+    )
+    scenario.install(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="libssl.so.3"):
+        create_l2_adapter(_obj_config(), L1MemoryDesc(4096, 8192, 4096))
 
 
 def test_factory_forwards_l1_arena_and_safe_status(

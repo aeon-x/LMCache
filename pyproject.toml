@@ -193,7 +193,19 @@ build = "cp3*-manylinux_x86_64 cp3*-manylinux_aarch64"
 # Derive a constraint from the build pin above -- one source of truth -- so the
 # smoke test exercises the pairing the wheel was actually built for. torchvision
 # is what would otherwise drag torch forward during the wheel install.
-before-all = "grep -oE 'torch==[0-9][0-9.]*' /project/pyproject.toml | head -1 > /project/cibw-constraints.txt && cat /project/cibw-constraints.txt"
+#
+# The native NIXL connector (lmcache.lmcache_nixl) compiles against the headers
+# vendored in csrc/third_party/nixl and links libnixl, unpacked here from the
+# nixl-cu13 wheel at NIXL_BUILD_VERSION. Keep that equal to the vendored
+# headers' version. Any interpreter in the image can download the cp312 nixl
+# wheel; the bundled libraries are the same for every Python version.
+before-all = [
+    "grep -oE 'torch==[0-9][0-9.]*' /project/pyproject.toml | head -1 > /project/cibw-constraints.txt",
+    "cat /project/cibw-constraints.txt",
+    "py=$(ls -d /opt/python/cp3*/bin/python | head -1)",
+    "$py -m pip download --no-deps --only-binary=:all: --platform manylinux_2_28_$(uname -m) --python-version 3.12 -d /tmp/nixl-wheel nixl-cu13==$NIXL_BUILD_VERSION",
+    "$py -m zipfile -e /tmp/nixl-wheel/*.whl /opt/nixl-libs",
+]
 
 # see https://developer.nvidia.com/cuda-gpus for compute capabilities
 # "CUDA-Enabled Datacenter Products"
@@ -206,7 +218,12 @@ before-all = "grep -oE 'torch==[0-9][0-9.]*' /project/pyproject.toml | head -1 >
 # 11.0: Thor (SM110)
 # 12.0: RTX 50-series, RTX Pro; DGX Spark / GB10 (sm_121) via the SM120 family
 # CUDA 13 dropped support for compute capability 7.0 (Volta).
-environment = {TORCH_CUDA_ARCH_LIST = "7.5;8.0;8.6;8.9;9.0;10.0;11.0;12.0", ENABLE_CXX11_ABI = "1", PIP_EXTRA_INDEX_URL = "https://download.pytorch.org/whl/cu130", PIP_CONSTRAINT = "/project/cibw-constraints.txt"}
+environment = {TORCH_CUDA_ARCH_LIST = "7.5;8.0;8.6;8.9;9.0;10.0;11.0;12.0", ENABLE_CXX11_ABI = "1", PIP_EXTRA_INDEX_URL = "https://download.pytorch.org/whl/cu130", PIP_CONSTRAINT = "/project/cibw-constraints.txt", NIXL_BUILD_VERSION = "1.3.1", BUILD_WITH_NIXL = "1", NIXL_LIBRARY_DIR = "/opt/nixl-libs/.nixl_cu13.mesonpy.libs"}
+# The smoke test imports the NIXL connector, which needs the nixl wheel, whose
+# vendored libraries link the system OpenSSL 3; the AlmaLinux 8 builder images
+# ship OpenSSL 1.1.
+test-requires = "nixl>=1.3.0,<2"
+before-test = "rpm -q openssl3-libs >/dev/null 2>&1 || (dnf install -y epel-release && dnf install -y openssl3-libs)"
 
 # Use the PyTorch manylinux image version '2_28' that contains CUDA 13.0
 manylinux-x86_64-image = "docker.io/pytorch/manylinux2_28-builder:cuda13.0"
@@ -214,7 +231,9 @@ manylinux-x86_64-image = "docker.io/pytorch/manylinux2_28-builder:cuda13.0"
 manylinux-aarch64-image = "docker.io/pytorch/manylinuxaarch64-builder:cuda13.0"
 
 [tool.cibuildwheel.linux]
+# libnixl comes from the nixl wheel at runtime, so it is excluded.
 repair-wheel-command = """
+LD_LIBRARY_PATH=/opt/nixl-libs/.nixl_cu13.mesonpy.libs:$LD_LIBRARY_PATH \
 auditwheel repair \
   --plat manylinux_2_28_$(uname -m) \
   --exclude libtorch.so \
@@ -224,5 +243,6 @@ auditwheel repair \
   --exclude libc10.so \
   --exclude libc10_cuda.so \
   --exclude libcudart.so.13 \
+  --exclude libnixl.so \
   -w {dest_dir} {wheel}
 """

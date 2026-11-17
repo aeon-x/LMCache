@@ -24,6 +24,7 @@ from lmcache.v1.distributed.l2_adapters import create_l2_adapter
 from lmcache.v1.distributed.l2_adapters.base import L2AdapterInterface
 from lmcache.v1.distributed.l2_adapters.nixl_native_l2_adapter import (
     NixlNativeL2AdapterConfig,
+    load_nixl_client_class,
 )
 from lmcache.v1.memory_management import (
     MemoryFormat,
@@ -185,10 +186,7 @@ def _make_posix_client(
     l1_alignment: int = _ALIGNMENT,
 ) -> Any:
     """Create a public native NIXL client over one registered L1 arena."""
-    # First Party
-    from lmcache.lmcache_nixl import LMCacheNixlClient
-
-    return LMCacheNixlClient(
+    return load_nixl_client_class()(
         backend="POSIX",
         backend_params={
             "file_path": str(base_path),

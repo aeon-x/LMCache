@@ -231,11 +231,42 @@ that connector retains its established `.data` identity.
 
 ## Optional dependency boundary
 
-`setup_extensions/storage_backend_profiles/nixl.py` discovers headers and
-`libnixl` only for the isolated `lmcache.lmcache_nixl` C++20 extension.
-Ordinary builds do not import NIXL or acquire a linker dependency. The Python
-factory imports the extension only after `nixl_native` is selected and returns
-an actionable build error when it is absent.
+The connector is the isolated C++20 extension `lmcache.lmcache_nixl`, built by
+`setup_extensions/storage_backend_profiles/nixl.py` whenever `libnixl` is
+available. Ordinary builds without it do not import NIXL or acquire a linker
+dependency, and the `lmcache` wheel never requires NIXL: the `lmcache[nixl]`
+extra adds the runtime, `nixl>=1.3.0,<2`.
+
+- Headers: NIXL's four public headers are vendored in `csrc/third_party/nixl/`,
+  because the `nixl` wheels ship `libnixl` but no headers. They are from NIXL
+  1.3.1, the oldest supported release; later releases only add to them, so a
+  connector compiled against them runs with any NIXL below 2. `NIXL_INCLUDE_DIR`
+  or `NIXL_PREFIX` selects another installation's headers instead.
+- CUDA wheels: cibuildwheel (`pyproject.toml`) unpacks `libnixl` from the
+  `nixl-cu13` wheel at `NIXL_BUILD_VERSION` (1.3.1, the vendored headers'
+  version) and builds with `BUILD_WITH_NIXL=1`. The extension links `libnixl`
+  by SONAME without a RUNPATH and bundles nothing (`auditwheel --exclude
+  libnixl.so`): `nixl` already ships `libnixl` and its plugins for each CUDA
+  line (`nixl-cu12`, `nixl-cu13`), and a second copy would load two NIXL
+  runtimes in a process that also uses vLLM's NIXL connector. The C++ API is
+  the same in both CUDA lines, so one wheel serves both. The wheel test moves
+  data through the connector with each line
+  (`.github/scripts/test_nixl_wheel.py`).
+- Source builds: set `BUILD_WITH_NIXL=1` and `NIXL_LIBRARY_DIR`; the extension
+  links that `libnixl` with a RUNPATH, so it loads without importing `nixl`.
+- The nightly image installs the newest `nixl` below 2, as the release images
+  resolve `lmcache[nixl]`, so a new NIXL release is exercised in the nightly
+  before it reaches a release image, and compiles the connector against that
+  installed `libnixl`, the only nixl in the image. It must also meet the
+  minimum NIXL version that the bundled vLLM's `NixlConnector` requires.
+
+The Python factory imports the connector only after `nixl_native` is selected:
+`lmcache.lmcache_nixl` first, which works for a source build through its
+RUNPATH; if that fails, `import nixl` and retry. Importing `nixl` loads the
+`libnixl` matching torch's CUDA, and the dynamic loader resolves the wheel's
+SONAME dependency to that loaded copy. When both fail, the error names
+`pip install "lmcache[nixl]"` and the source build settings, and includes both
+import errors.
 
 Runtime status exposes only the backend name, inferred storage type, workers,
 FILE path, direct-I/O choice, and inferred strategy capabilities. The opaque

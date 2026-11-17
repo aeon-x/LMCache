@@ -22,18 +22,35 @@ checks those capabilities when it starts and rejects ambiguous plugins.
 Build and runtime requirements
 ------------------------------
 
-The minimum supported NIXL version is 1.3.0. A source installation must install
-the public C++ headers as well as ``libnixl``. Build LMCache with:
+The ``lmcache/vllm-openai`` release and nightly images include the connector.
+Elsewhere, install LMCache with the ``nixl`` extra (Python 3.10 to 3.14):
+
+.. code-block:: bash
+
+   pip install "lmcache[nixl]"
+
+The CUDA wheels of ``lmcache`` include the connector (``lmcache.lmcache_nixl``);
+the extra adds the ``nixl`` runtime (``nixl>=1.3.0,<2``). The connector is
+compiled against NIXL 1.3.1 and runs with any NIXL in that range. The ``nixl``
+package bundles ``libnixl`` and its plugins for CUDA 12 and CUDA 13; the adapter
+loads the one matching torch's CUDA build, so no build flags or environment
+variables are needed. The ``nixl`` wheel requires the system OpenSSL 3
+libraries (``libssl.so.3``), present on Ubuntu 22.04+ and RHEL 9; on
+RHEL/Alma/Rocky 8 install ``openssl3-libs`` from EPEL.
+
+A source installation builds the connector when ``libnixl`` is available. The
+minimum supported NIXL version is 1.3.0. LMCache vendors NIXL's public headers,
+so only the library is needed, for example from an installed ``nixl`` wheel or a
+NIXL installation:
 
 .. code-block:: bash
 
    export BUILD_WITH_NIXL=1
-   export NIXL_INCLUDE_DIR=/opt/nixl/include
    export NIXL_LIBRARY_DIR=/opt/nixl/lib
    uv pip install -e . --no-build-isolation
 
-``NIXL_PREFIX=/opt/nixl`` can replace the two directory variables when the
-installation uses conventional ``include`` and ``lib`` directories. The build
+Set ``NIXL_INCLUDE_DIR`` (or ``NIXL_PREFIX=/opt/nixl`` for conventional
+``include`` and ``lib`` directories) to build against another NIXL's headers. The build
 produces ``lmcache.lmcache_nixl`` as an isolated C++20 extension. A normal build
 without NIXL headers and libraries does not build or import this extension.
 
@@ -270,8 +287,14 @@ Troubleshooting
 ---------------
 
 ``lmcache_nixl`` cannot be imported
-   Rebuild with ``BUILD_WITH_NIXL=1`` and verify that ``NIXL_INCLUDE_DIR``
-   contains ``nixl.h`` and ``NIXL_LIBRARY_DIR`` contains ``libnixl.so``.
+   Install ``lmcache[nixl]`` for the ``nixl`` runtime. For a source build,
+   rebuild with ``BUILD_WITH_NIXL=1`` and verify that ``NIXL_LIBRARY_DIR``
+   contains ``libnixl.so``.
+
+``import nixl`` fails with ``libssl.so.3: cannot open shared object file``
+   The host lacks OpenSSL 3, which the ``nixl`` wheel links but does not
+   bundle. Install it (``openssl3-libs`` from EPEL on RHEL-family 8) or use a
+   newer base OS.
 
 Plugin discovery or backend creation fails
    Verify NIXL 1.3 or newer, set ``NIXL_PLUGIN_DIR`` to the installed plugin

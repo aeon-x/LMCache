@@ -14,15 +14,19 @@ if TYPE_CHECKING:
 # First Party
 from setup_extensions.storage_backend_profiles import StorageBackendProfile
 
+# NIXL's public headers, vendored because the nixl wheels ship libnixl but no
+# headers (see csrc/third_party/nixl/README.md).
+_VENDORED_INCLUDE_DIR = Path(__file__).resolve().parents[2] / "csrc/third_party/nixl"
+
 
 class NixlStorageBackend(StorageBackendProfile):
-    """Build the native NIXL connector against a NIXL 1.3+ SDK."""
+    """Build the native NIXL connector against NIXL 1.3+ headers and libnixl."""
 
     name = "nixl"
     env_var = "BUILD_WITH_NIXL"
 
     def detect(self) -> bool:
-        """Return whether both the NIXL header and library are available."""
+        """Return whether libnixl is available (headers are vendored)."""
         return self._find_include_dir() is not None and self._has_library()
 
     def build(self, extra_cxx_flags: list[str]) -> list["Extension"]:
@@ -70,7 +74,12 @@ class NixlStorageBackend(StorageBackendProfile):
                 ],
                 library_dirs=library_dirs,
                 libraries=["nixl"],
-                runtime_library_dirs=list(library_dirs),
+                # A published wheel resolves libnixl from the already-imported
+                # nixl wheel, and the build-time path does not exist on user
+                # hosts, so cibuildwheel builds carry no RUNPATH.
+                runtime_library_dirs=(
+                    [] if os.environ.get("CIBUILDWHEEL") == "1" else list(library_dirs)
+                ),
                 extra_compile_args={
                     "cxx": extra_cxx_flags + ["-O3", "-std=c++20"],
                 },
@@ -91,6 +100,7 @@ class NixlStorageBackend(StorageBackendProfile):
                 Path("/usr/local/nixl/include"),
                 Path("/usr/local/include"),
                 Path("/usr/include"),
+                _VENDORED_INCLUDE_DIR,
             ]
         )
         return candidates
